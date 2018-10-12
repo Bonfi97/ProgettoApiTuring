@@ -1,774 +1,1122 @@
-//#include "stdafx.h"
+//#pragma GCC optimize ("O3")
+//#pragma GCC optimize ("-fpredictive-commoning")
+//#pragma GCC optimize ("-freorder-blocks-and-partition")
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
-//FILE* f_log = NULL;
-//int contamalloc = 0;
+#include <limits.h>
 
 
-struct riga {
-	unsigned i;
-	char l;
-	char s;
-	short m;
-	unsigned f;
+
+int staticCounter = 0;
+
+
+typedef enum boolEnum {
+	TRUE = 1, FALSE = 0
+} boolType;
+
+enum rbtColor_e {
+	red, black
 };
 
-struct acc //accettazione
-{
-	int n_stato;
-	struct acc* next;
+typedef enum moveType_e {
+	U, W, R
+}moveType_t;
+
+typedef struct transitionResultsListElem_s {
+	char tapeOut;
+	int nextState;
+	signed char tapeMovement;
+	boolType isFinal;
+	moveType_t moveType;
+	struct transitionResultsListElem_s *next;
+} transitionResultsListElem;
+
+typedef struct hashTableElem_s {
+	int state;
+	//int listSize;
+	transitionResultsListElem *listHead;
+}hashTableElem;
+
+typedef struct hashTable_s {
+	hashTableElem *hashTable;
+	int size;
+	int insertedElements;
+}hashTableType;
+
+void hashTableInsert(hashTableType *hashTable, int, char, char, int, moveType_t);
+unsigned int hash(unsigned int x);
+int hashTableLookUpPosition(hashTableElem* hashTable, int size, int state);
+void freeHashTable(hashTableType * hashTable);
+
+
+
+typedef struct statesRbtElem_s {
+	int state;
+	struct statesRbtElem_s *p, *l, *r;
+	enum rbtColor_e color;
+	int listSize;
+	transitionResultsListElem *listHead;
+} statesRbtElem;
+
+typedef struct returnPair_s {
+	statesRbtElem *z, *root;
+} returnPair;
+
+statesRbtElem *insertInStateRbt(statesRbtElem *, int, char, char, int, moveType_t);
+
+statesRbtElem RBTNULL;
+
+typedef struct accListElem_s {
+	int val;
+	struct accListElem_s *next;
+}accListElem;
+
+typedef struct tapeChunkElem_s {
+	char *chunk;
+	unsigned char size;
+	int ref;
+
+}tapeChunkElem;
+
+struct tapeContainer_s {
+	tapeChunkElem *tape[2];
 };
 
-struct inp //lista di input
-{
-	struct string2* s; //stringa di input
-	struct inp* next;
-};
+typedef struct quequeElem_s {
+	struct tapeContainer_s tapeContainer;
+	int currentState;
+	long executedMoves, currentTapePosition;
+	struct quequeElem_s *next;
+} queueElem;
 
-struct rigals //lista di input
-{
-	struct riga s; //stringa di input
-	struct rigals* next;
-};
-
-
-struct mossa {
-	struct string2* stringa; //nastro
-	int n_testa; //posizione della testa
-	int n_mosse;
-	int stato_corrente;
-};
-
-struct string2 {
-	char* s;
-	unsigned n_stringa;
-	unsigned quante_volte_mi_usano;
-};
+typedef struct runQueue_s {
+	queueElem *head, *tail;
+	int size;
+} runQueue;
 
 
-struct soluz {
-	char s;
-	struct soluz* next;
-};
+returnPair rbInsertFixup(statesRbtElem *, statesRbtElem *);
+statesRbtElem *leftRotate(statesRbtElem *, statesRbtElem *);
+statesRbtElem *rightRotate(statesRbtElem *, statesRbtElem *);
+transitionResultsListElem *transitionResultsListPushTop(transitionResultsListElem *, char, char, int, moveType_t, boolType);
 
-struct mossal {
-	struct mossa m;
-	struct mossal* next;
-};
+long MIN(long, long);
+long customAbs(long v);
+int fileParser(FILE *);
+void showtree(hashTableType *, char inTape);
+void printQueue(runQueue *queue);
+void setFinal(hashTableType *, int);
+transitionResultsListElem *getTransitionList(int currentState, char currentTapeChar);
+
+#ifdef _MSC_VER
+char startQueue(struct tapeContainer_s *, long);
+void enqueue(runQueue *queue, queueElem *new);
+queueElem *dequeue(runQueue *queue);
+
+void tapeWrite(struct tapeContainer_s *container, long index, char in);
+char getTape(struct tapeContainer_s *container, long index);
+queueElem *newQueueElem(queueElem *src, int nextState, char tapeOut, int tapeMovement, moveType_t moveType);
+void freeQueueElem(queueElem *elem);
+#else
+char startQueue(struct tapeContainer_s *, long)  __attribute__((hot));
+void enqueue(runQueue *queue, queueElem *new) __attribute__((hot));
+queueElem *dequeue(runQueue *queue) __attribute__((hot));
+
+void tapeWrite(struct tapeContainer_s *container, long index, char in) __attribute__((hot));
+char getTape(struct tapeContainer_s *container, long index) __attribute__((hot));
+queueElem *newQueueElem(queueElem *src, int nextState, char tapeOut, int tapeMovement, moveType_t moveType) __attribute__((hot));
+void freeQueueElem(queueElem *elem) __attribute__((hot));
+#endif
 
 
+hashTableType tapeInArray[UCHAR_MAX + 1];
+long maximunMoves;
 
-#define CHAR_NIENTE ('_')
-#define N_TRANS  (1024)
-#define N_ACCET (32)
-#define N_CHAR (75)
-#define N_ACCRESCI_NASTRO (100)
+boolType zeroAccStateFlag = FALSE;
+//boolType noAccStateFlag = TRUE;
+//boolType accUnreachableFlag = TRUE;
+boolType noAccStateFlag = TRUE;
+boolType accUnreachableFlag = TRUE;
 
-long max;
-struct acc* accl[N_ACCET] = { NULL }; //accettazione list
 
-struct rigals* rigal[N_TRANS][N_CHAR] = { { NULL } }; //lista di righe di transizioni
-char soluz;
+long chunkNumber = 0;
+//#define CHUNK_SIZE 50
+//int chunkSize = 8192;
+//int chunkSize = (1<<15);
+//int chunkSize = (1 << 16)*1.2;
+long chunkSize = (1 << 9);
+unsigned char initialTapeSize = 10;
+unsigned char tapeSizeIncrement = 2;
 
-struct mossal* lista_mosse_coda;
+#define hashTableLoadFactor 0.4
 
-inline void* malloc2(size_t t)
-{
-	/*
-	int chiamante = 0;
-	__asm {
-	mov eax, [ebp + 4]
-	mov[chiamante], eax
+#define  noSeekOptFlag 0
+#define seekBackOpt 1
+
+int main(int argc, char *argv[]) {
+	FILE *fp;
+	int i;
+	char c;
+
+	//printf("@@@@@@@@@@@@@@@@@@@@\n");
+
+	for (i = 0; i < UCHAR_MAX + 1; i++) {
+		tapeInArray[i].hashTable = NULL;
+		tapeInArray[i].insertedElements = 0;
+		tapeInArray[i].size = 0;
 	}
-	*/
-	void* r = malloc(t);
-	//fprintf(f_log, "M %p %d %d %d\n", r, (int)t, chiamante, contamalloc);
-	//contamalloc++;
-	return r;
-}
 
-inline void free2(void* p)
-{
-	/*
-	unsigned chiamante = 0;
-	_asm {
-	mov eax, [ebp + 4]
-	mov[chiamante], eax
+
+	fp = stdin;
+#ifdef _MSC_VER
+	fp = fopen("41.txt", "r");
+#endif
+	if (fileParser(fp) == 0)
+		return 1;
+
+	//hashTableElem *nullList = malloc(sizeof(hashTableElem));
+	//nullList->listHead = NULL;
+
+	//for (i = 0; i < UCHAR_MAX + 1; i++) {
+	//	if (tapeInArray[i].hashTable == NULL) {
+	//		tapeInArray[i].hashTable = nullList;
+	//	}
+	//}
+
+	//exit(1);
+
+	//printf("SHOW TREE:\n");
+
+	//for (i = 0; i < UCHAR_MAX + 1; i++) {
+	//	if (tapeInArray[i].size >0) {
+	//		showtree(&(tapeInArray[i]), i);
+	//	}
+	//}
+
+	//fflush(stdout);
+	//exit(1);
+
+	//printf("END PARSING\n\n");
+	////maximunMoves = 10;
+
+
+
+	c = getc(fp);
+	if (c == '\r') {
+		c = getc(fp);
 	}
-
-	fprintf(f_log, "F %p %d\n", p, chiamante);
-	*/
-	free(p);
-}
-
-size_t getline2(char **lineptr, size_t *n, FILE *stream) {
-	char *bufptr = NULL;
-
-	size_t size = *n;
-
-
-	unsigned l_read = 0;
-
-	if (lineptr == NULL) {
-		return -1;
-	}
-	if (stream == NULL) {
-		return -1;
-	}
-	if (n == NULL) {
-		return -1;
-	}
-	bufptr = *lineptr;
-
-
-	int c = fgetc(stream);
-	if (c == EOF) {
-		return -1;
-	}
-	if (bufptr == NULL) {
-		bufptr = (char*)malloc2(128);
-		if (bufptr == NULL) {
-			return -1;
-		}
-		size = 128;
-	}
-
 	while (c != EOF) {
-		if ((l_read) > ((unsigned)(size - 1))) {
-			size = size + 128;
-			bufptr = (char*)realloc(bufptr, size);
-			if (bufptr == NULL) {
-				return -1;
+		if (noAccStateFlag || accUnreachableFlag) {
+			//printf("0\n");
+			putchar('0');
+			//printf(" boh");
+			putchar('\n');
+
+			while (c != '\n' && c != EOF) {
+				c = getc(fp);
+				if (c == '\r') {
+					c = getc(fp);
+				}
 			}
 		}
-		bufptr[l_read] = c;
-		if (c == '\n') {
-			break;
-		}
-		c = fgetc(stream);
-		l_read++;
-	}
-	if (c == EOF)
-	{
-		if ((l_read) > ((unsigned)(size - 1))) {
-			size = size + 128;
-			bufptr = (char*)realloc(bufptr, size);
-			if (bufptr == NULL) {
-				return -1;
+		else if (zeroAccStateFlag) {
+			putchar('1');
+			putchar('\n');
+			while (c != '\n' && c != EOF) {
+				c = getc(fp);
+				if (c == '\r') {
+					c = getc(fp);
+				}
 			}
 		}
-		//l_read++;
+		else {
+			struct tapeContainer_s *container = malloc(sizeof(struct tapeContainer_s));
+			container->tape[0] = NULL;
+			container->tape[1] = malloc(sizeof(tapeChunkElem));
+			container->tape[1]->size = initialTapeSize;
+			container->tape[1]->ref = 1;
+			container->tape[1]->chunk = malloc(sizeof(char) * (1 << container->tape[1]->size));
+			memset(container->tape[1]->chunk, '_', sizeof(char) * (1 << container->tape[1]->size));
+
+			//for (int v = 0; v < 2 * maximunMoves + 1 ; v++)
+			//	printf("%c", tape[v]);
+			//printf("\n");
+			//fflush(stdout);
+			long index = maximunMoves;
+			while (c != '\n' && c != EOF) {
+				if (index < 2 * maximunMoves + 1) {
+					tapeWrite(container, index, c);
+					//printf("%d\n",c);
+				}
+				index++;
+				c = getc(fp);
+				if (c == '\r') {
+					c = getc(fp);
+				}
+			}
+
+			//for (int v = 0; v < (2 * maximunMoves + 1); v++) {
+			//	if (v == maximunMoves)
+			//		printf("^%C^", getTape(container, v));
+			//	else
+			//		printf("%c", getTape(container, v));
+			//}
+			//printf("\n");
+			//system("pause");
+			//fflush(stdout);
+
+			//for (int v = 0; v < chunkNumber; v++)
+			//	printf("chunkArray[%d] = %d\n", v, chunkArray[v]);
+			//system("pause");
+			if (index > maximunMoves) {
+				char ris = startQueue(container, maximunMoves);
+				free(container);
+				//printf("%c\n", ris);
+				putchar(ris);
+				putchar('\n');
+			}
+			//else {
+			//	exit(1);
+			//}
+
+			//system("pause");
+		}
+
+		if (c != EOF) {
+			c = getc(fp);
+			if (c == '\r') {
+				c = getc(fp);
+			}
+		}
 	}
 
-	bufptr[l_read] = '\0';
-	*lineptr = bufptr;
-	*n = size;
 
-	return l_read;
+	//for (i = 0; i < UCHAR_MAX + 1; i++) {
+	//	if (tapeInArray[i] .size >0) {
+	//		showtree(&(tapeInArray[i]), i);
+	//	}
+	//}
+
+
+	//for (i = 0; i < UCHAR_MAX + 1; i++) {
+	//	if (tapeInArray[i].size > 0) {
+	//		freeHashTable(&(tapeInArray[i]));
+	//	}
+	//}
+	//free(nullList);
+
+
+#ifdef _MSC_VER
+	system("pause");
+#endif
+	return 0;
 }
 
+int fileParser(FILE *fp) {
+	int i;
 
-inline void insert_top_a(int num, struct acc *head[N_ACCET]) {
-	int d = num & (N_ACCET - 1);
-	struct acc *new_node = NULL;
-	new_node = (struct acc*) malloc2(sizeof(struct acc));
-	new_node->n_stato = num;
-	new_node->next = head[d];
-	head[d] = new_node;
+	fscanf(fp, "tr\n");
+
+	char buf[14];
+	char b, c, d;
+	int a, e;
+	boolType stop;
+	for (i = 0, stop = FALSE; !stop; i++) {
+		fscanf(fp, "%13s ", buf);
+
+		if (strcmp(buf, "acc") == 0)
+			stop = TRUE;
+		else {
+			moveType_t moveType;
+			//fscanf(" %c %c %c %d\n", &b, &c, &d, &e);
+			fscanf(fp, " %c", &b);
+			fscanf(fp, " %c", &c);
+			fscanf(fp, " %c", &d);
+			fscanf(fp, " %d\n", &e);
+			a = atoi(buf);
+			//printf("%d %c %c %c %d\n", a, b, c, d, e);
+			if (b == c) {
+				if (a == e && d == 'S')
+					moveType = U;
+				else
+					moveType = R;
+			}
+			else {
+				moveType = W;
+			}
+			hashTableInsert(&(tapeInArray[(unsigned char)b]), a, c, d, e, moveType);
+			//tapeInArray[(unsigned char)b] = insertInStateRbt(tapeInArray[(unsigned char)b], a, c, d, e, moveType);
+		}
+
+
+	}
+
+	stop = FALSE;
+	//accListElem *listHead = NULL;
+	while (!stop) {
+		fscanf(fp, "%13s\n", buf);
+
+		if (strcmp(buf, "max") == 0)
+			stop = TRUE;
+		else {
+			//accListElem *new = malloc(sizeof(accListElem));
+			//new->next = listHead;
+			//new->val = atoi(buf);
+			noAccStateFlag = FALSE;
+			int tmp = atoi(buf);
+			if (tmp == 0)
+				zeroAccStateFlag = TRUE;
+			//printf("acc : %d\n", tmp);
+			for (i = 0; i < UCHAR_MAX; i++) {
+				noAccStateFlag = FALSE;
+				setFinal(&(tapeInArray[i]), tmp);
+			}
+		}
+	}
+
+	/*if (listHead == NULL) {
+		noAccStateFlag = TRUE;
+	}
+	else {
+		accListElem *p = listHead, *tmp;
+		while (p) {
+			for (i = 0; i < UCHAR_MAX; i++) {
+				setFinal(tapeInArray[i], p->val);
+			}
+			tmp = p;
+			p = p->next;
+			free(p);
+		}
+	}*/
+
+	fscanf(fp, "%ld\n", &maximunMoves);
+
+	fscanf(fp, "run\n");
+
+	//printf("max: %d\n", maximunMoves);
+
+	return 1;
 }
 
-inline struct soluz* insert_top_s(char num, struct soluz *head) {
-	struct soluz *new_node = NULL;
-	new_node = (struct soluz*) malloc2(sizeof(struct soluz));
-	new_node->s = num;
-	new_node->next = head;
-	head = new_node;
-	return head;
+void showtree(hashTableType * hashTable, char inTape) {
+	int i;
+	transitionResultsListElem * p;
+
+	for (i = 0; i < hashTable->size; i++) {
+		for (p = hashTable->hashTable[i].listHead; p; p = p->next) {
+			printf("%d %c %c %d %d", hashTable->hashTable[i].state, inTape, p->tapeOut, p->tapeMovement, p->nextState);
+			if (p->isFinal)
+				printf(" Finale");
+			printf("\n");
+		}
+	}
+
 }
 
-inline void insert_top_t(struct riga* num) {
-	char destinazione_colonna = num->l - '0';
-	int d1 = (num->i)&(N_TRANS - 1);
-	struct rigals *new_node = NULL;
-	new_node = (struct rigals*) malloc2(sizeof(struct rigals));
-	new_node->s.f = num->f;
-	new_node->s.i = num->i;
-	new_node->s.l = num->l;
-	new_node->s.m = num->m;
-	new_node->s.s = num->s;
-	new_node->next = rigal[d1][destinazione_colonna];
-	rigal[d1][destinazione_colonna] = new_node;
+void freeHashTable(hashTableType * hashTable) {
+	transitionResultsListElem * p;
+	int i;
+
+	for (i = 0; i < hashTable->size; i++) {
+		if (hashTable->hashTable[i].listHead != NULL) {
+			p = hashTable->hashTable[i].listHead;
+			while (p) {
+				transitionResultsListElem *tmp = p;
+				p = p->next;
+				free(tmp);
+			}
+		}
+	}
+	free(hashTable->hashTable);
+
 }
 
-inline struct inp* insert_top_i(char* s, unsigned l, struct inp *head) {
-	struct inp *new_node = NULL;
-	new_node = (struct inp*) malloc2(sizeof(struct inp));
-	new_node->s = (struct string2*)malloc2(sizeof(struct string2));
-	new_node->s->s = (char*)malloc2(sizeof(char)*l);
-	new_node->s->n_stringa = l;
-	unsigned i = 0;
-	for (i = 0; i<l; i++)
-		new_node->s->s[i] = s[i];
+void setFinal(hashTableType * hashTable, int state) {
+	transitionResultsListElem * p;
+	int i;
 
-	new_node->next = head;
-	head = new_node;
-	return head;
+	for (i = 0; i < hashTable->size; i++) {
+		if (hashTable->hashTable[i].listHead != NULL) {
+			for (p = hashTable->hashTable[i].listHead; p; p = p->next) {
+				if (p->nextState == state) {
+					p->isFinal = TRUE;
+					accUnreachableFlag = FALSE;
+				}
+
+			}
+		}
+	}
+
 }
 
-inline struct string2* string_copy(struct string2* source, int inc)
-{
-	struct string2* x = (struct string2*)malloc2(sizeof(struct string2));
+void hashTableInsert(hashTableType * hashTable, int currentState, char tapeOut, char tapeMovement, int nextState, moveType_t moveType) {
+	if (hashTable->size == 0) {
+		hashTable->insertedElements = 0;
+		hashTable->size = 128;
+		hashTable->hashTable = calloc(hashTable->size, sizeof(hashTableElem));
+	}
 
-	if (inc == 0)
-	{
-		x->n_stringa = source->n_stringa;
-	}
-	else
-	{
-		x->n_stringa = source->n_stringa + N_ACCRESCI_NASTRO;
-	}
-	x->s = (char*)malloc2((sizeof(char))*(x->n_stringa));
+	hashTable->insertedElements += 1;
 
-	if (inc == 0)
-	{
-		memcpy(x->s, source->s, source->n_stringa);
+	if (((double)hashTable->insertedElements) / hashTable->size > hashTableLoadFactor) {
+		int oldSize = hashTable->size;
+		hashTableElem *oldHashTable = hashTable->hashTable;
+		hashTable->size = hashTable->size*2;
+		hashTable->hashTable = calloc(hashTable->size, sizeof(hashTableElem));
+		int i;
+		for (i = 0; i < oldSize; i++) {
+			if (oldHashTable[i].listHead != NULL) {
+				int index = hashTableLookUpPosition(hashTable->hashTable, hashTable->size, oldHashTable[i].state);
+				hashTable->hashTable[index].listHead = oldHashTable[i].listHead;
+				//hashTable->hashTable[index].listSize = oldHashTable[i].listSize;
+				hashTable->hashTable[index].state = oldHashTable[i].state;
+			}
+		}
+		free(oldHashTable);
 	}
-	else if (inc == 1)
-	{
-		memcpy(x->s, source->s, source->n_stringa);
 
-		char* s2 = x->s;
-		s2 += x->n_stringa - N_ACCRESCI_NASTRO;
-		memset(s2, CHAR_NIENTE, N_ACCRESCI_NASTRO);
-	}
-	else if (inc == -1)
-	{
-		char* s2 = x->s;
-		s2 += N_ACCRESCI_NASTRO;
-		memcpy(s2, source->s, source->n_stringa);
+	int index = hashTableLookUpPosition(hashTable->hashTable, hashTable->size, currentState);
+	hashTable->hashTable[index].listHead = transitionResultsListPushTop(hashTable->hashTable[index].listHead, tapeOut, tapeMovement, nextState, moveType, FALSE);
+	hashTable->hashTable[index].state = currentState;
+}
 
-		memset(x->s, CHAR_NIENTE, N_ACCRESCI_NASTRO);
+int hashTableLookUpPosition(hashTableElem* hashTable, int size, int state) {
+	int i;
+	unsigned int calculatedHash = hash(state);
+	//unsigned int calculatedHash = state;
+	for (i = 0; i < size; i++) {
+		int index = (unsigned)(calculatedHash + i) & (size - 1);
+		if ((hashTable[index].state == state && hashTable[index].listHead != NULL) || hashTable[index].listHead == NULL) {
+			return index;
+		}
+		//if (i > 50) {
+		//	exit(1);
+		//}
 	}
+}
+
+unsigned int hash(unsigned int x) {
+	//x = (x ^ 61) ^ (x >> 16);
+	//x = x + (x << 3);
+	//x = x ^ (x >> 4);
+	//x = x * 0x27d4eb2d;
+	//x = x ^ (x >> 15);
+
+	//x = ((x >> 16) ^ x) * 0x45d9f3b;
+	//x = ((x >> 16) ^ x) * 0x45d9f3b;
+	//x = (x >> 16) ^ x;
+
+	x *= 2654435769;
+
+	//x = (x + 0x7ed55d16) + (x << 12);
+	//x = (x ^ 0xc761c23c) ^ (x >> 19);
+	//x = (x + 0x165667b1) + (x << 5);
+	//x = (x + 0xd3a2646c) ^ (x << 9);
+	//x = (x + 0xfd7046c5) + (x << 3);
+	//x = (x ^ 0xb55a4f09) ^ (x >> 16);
+
+	//x = (x ^ 0xdeadbeef) + (x << 4);
+	//x = x ^ (x >> 10);
+	//x = x + (x << 7);
+	//x = x ^ (x >> 13);
+
+	//x ^= (x >> 20) ^ (x >> 12);
+	//x = x ^ (x >> 7) ^ (x >> 4);
 
 	return x;
 }
 
+//statesRbtElem *insertInStateRbt(statesRbtElem *root, int currentState, char tapeOut, char tapeMovement, int nextState, moveType_t moveType) {
+//	statesRbtElem *y = &RBTNULL, *x = root, *z;
+//	boolType alreadyInside = FALSE;
+//
+//	while (x != &RBTNULL && !alreadyInside) {
+//		y = x;
+//		if (currentState == x->state)
+//			alreadyInside = TRUE;
+//		else if (currentState < x->state)
+//			x = x->l;
+//		else
+//			x = x->r;
+//	}
+//
+//	if (alreadyInside) {
+//		//printf("Already inside\n");
+//		y->listHead = transitionResultsListPushTop(y->listHead, tapeOut, tapeMovement, nextState, moveType, &(y->listSize), FALSE);
+//		//if (y->listHead == NULL) {
+//		//	printf("err\n");
+//		//	return NULL;
+//		//}
+//	}
+//	else {
+//		//printf("new elem\n");
+//		z = malloc(sizeof(statesRbtElem));
+//		/*if (!(z = malloc(sizeof(statesRbtElem)))) {
+//			printf("errore allocazione di un nodo di statesRbtElem in insertInStateRbt\n");
+//			return NULL;
+//		}*/
+//
+//		z->p = y;
+//		z->state = currentState;
+//		z->l = &RBTNULL;
+//		z->r = &RBTNULL;
+//
+//		if (y == &RBTNULL)
+//			root = z;
+//		else if (z->state < y->state)
+//			y->l = z;
+//		else
+//			y->r = z;
+//
+//		z->listHead = NULL;
+//		z->listHead = transitionResultsListPushTop(z->listHead, tapeOut, tapeMovement, nextState, moveType, &(z->listSize), FALSE);
+//		//if (z->listHead == NULL) {
+//		//	printf("err\n");
+//		//	return NULL;
+//		//}
+//		z->listSize = 1;
+//
+//		z->color = red;
+//		returnPair tmp;
+//		tmp = rbInsertFixup(root, z);
+//		z = tmp.z;
+//		root = tmp.root;
+//	}
+//
+//	return root;
+//}
+//
+//returnPair rbInsertFixup(statesRbtElem *root, statesRbtElem *z) {
+//	statesRbtElem *x, *y;
+//	if (z == root) {
+//		root->color = black;
+//	}
+//	else {
+//		x = z->p;
+//		if (x->color == red) {
+//			if (x == x->p->l) {
+//				y = x->p->r;
+//				if (y->color == red) {
+//					x->color = black;
+//					y->color = black;
+//					x->p->color = red;
+//					returnPair tmp;
+//					tmp = rbInsertFixup(root, x->p);
+//					x->p = tmp.z;
+//					root = tmp.root;
+//				}
+//				else if (z == x->r) {
+//					z = x;
+//					root = leftRotate(root, z);
+//					x = z->p;
+//				}
+//				x->color = black;
+//				x->p->color = red;
+//				root = rightRotate(root, x->p);
+//			}
+//			else {
+//				y = x->p->l;
+//				if (y->color == red) {
+//					x->color = black;
+//					y->color = black;
+//					x->p->color = red;
+//					returnPair tmp;
+//					tmp = rbInsertFixup(root, x->p);
+//					x->p = tmp.z;
+//					root = tmp.root;
+//				}
+//				else if (z == x->l) {
+//					z = x;
+//					root = rightRotate(root, z);
+//					x = z->p;
+//				}
+//				x->color = black;
+//				x->p->color = red;
+//				root = leftRotate(root, x->p);
+//			}
+//		}
+//
+//	}
+//	returnPair ret;
+//	ret.z = z;
+//	ret.root = root;
+//	return ret;
+//}
+//
+//statesRbtElem *leftRotate(statesRbtElem *root, statesRbtElem *x) {
+//	statesRbtElem * y;
+//	y = x->r;
+//	x->r = y->l;
+//
+//	if (y->l != &RBTNULL)
+//		y->l->p = x;
+//	y->p = x->p;
+//	if (x->p == &RBTNULL)
+//		root = y;
+//	else if (x == x->p->l)
+//		x->p->l = y;
+//	else
+//		x->p->r = y;
+//	y->l = x;
+//	x->p = y;
+//	return root;
+//}
+//
+//statesRbtElem *rightRotate(statesRbtElem *root, statesRbtElem *x) {
+//	statesRbtElem * y;
+//	y = x->l;
+//	x->l = y->r;
+//
+//	if (y->r != &RBTNULL)
+//		y->r->p = x;
+//	y->p = x->p;
+//	if (x->p == &RBTNULL)
+//		root = y;
+//	else if (x == x->p->r)
+//		x->p->r = y;
+//	else
+//		x->p->l = y;
+//	y->r = x;
+//	x->p = y;
+//	return root;
+//}
 
+transitionResultsListElem *transitionResultsListPushTop(transitionResultsListElem *h, char tapeOut, char tapeMovement, int nextSate, moveType_t moveType, boolType isFinal) {
+	transitionResultsListElem *p, *tmp = NULL;
+	char movementConverted;
+	if (tapeMovement == 'R')
+		movementConverted = 1;
+	else if (tapeMovement == 'L')
+		movementConverted = -1;
+	else
+		movementConverted = 0;
 
-
-
-
-
-inline void AggiornaSoluzione(char s)
-{
-	if (s == '1')
-	{
-		soluz = '1';
-	}
-	else if (s == 'U')
-	{
-		if (soluz != '1')
-		{
-			soluz = 'U';
+	if (h != NULL) {
+		p = h;
+		while (p) {
+			if (p->nextState == nextSate && p->tapeMovement == movementConverted && p->tapeOut == tapeOut) {
+				//printf("check");
+				return h;
+			}
+			tmp = p;
+			p = p->next;
 		}
 	}
+
+	transitionResultsListElem *new;
+	new = malloc(sizeof(transitionResultsListElem));
+	//if (new = malloc(sizeof(transitionResultsListElem))) {
+	new->tapeOut = tapeOut;
+	new->tapeMovement = movementConverted;
+	new->nextState = nextSate;
+	new->isFinal = isFinal;
+	new->next = NULL;
+	new->moveType = moveType;
+	//new->moveType = W;
+
+	if (h == NULL) {
+		h = new;
+	}
+	else {
+		tmp->next = new;
+	}
+	/*}
+	else {
+		printf("errore allocazione transitionResultsListElem in transitionResultsListPushTop\n");
+		h = NULL;
+	}*/
+	return h;
 }
 
-inline struct rigals* Risolvi(struct mossa m)
-{
-	if (m.n_mosse > max)
-	{
-		AggiornaSoluzione('U');
-		m.stringa->quante_volte_mi_usano--;
+char startQueue(struct tapeContainer_s *container, long originalTapeIndex) {
+
+	staticCounter = 0;
+
+	runQueue queue;
+	transitionResultsListElem *listHead;
+	char status = '0';
+
+	queueElem *new;
+	new = malloc(sizeof(queueElem));
+
+	queue.head = new;
+	queue.tail = new;
+
+	new->next = NULL;
+	new->currentState = 0;
+	new->currentTapePosition = originalTapeIndex;
+	new->executedMoves = 0;
+	new->tapeContainer.tape[0] = NULL;
+	new->tapeContainer.tape[1] = container->tape[1];
+
+	//queue.size = 1;
+
+	//runQueue waitQueue;
+	//waitQueue.head = NULL;
+	//waitQueue.size = 0;
+	//waitQueue.tail = NULL;
+
+	//while ((queue.head != NULL || waitQueue.head != NULL) && status != '1')
+	while (queue.head != NULL && status != '1') {
+
+		//printf("status = %c\n", status);
+		//printf("\n");
+		//printQueue(&queue);
+
+		queue.head->executedMoves++;
+
+		//if (queue.head->executedMoves >= maximunMoves)
+		if (queue.head->executedMoves > maximunMoves) {
+			status = 'U';
+			//printf("U BRANCH\n");
+			queueElem *tmp = dequeue(&queue);
+			freeQueueElem(tmp);
+		}
+		else {
+			//tapeChunkElem *chunk = queue.head->tapeChunkArray[queue.head->currentTapePosition / chunkSize];
+			char actualTapeChar = getTape(&(queue.head->tapeContainer), queue.head->currentTapePosition);
+			listHead = getTransitionList(queue.head->currentState, actualTapeChar);
+
+			//transitionResultsListElem *p;
+			//int i;
+			//for (i = 0, p = listHead; i < listSize; i++, p = p->next) {
+			//	printf("%d %c %c %d %d", queue.head->currentState, actualTapeChar, p->tapeOut, p->tapeMovement, p->nextState);
+			//	if (p->isFinal)
+			//		printf(" Finale");
+			//	printf("\n");
+			//}
+
+			if (listHead == NULL) {
+				//printf("NO MOVE BRANCH\n");
+				queueElem *tmp = dequeue(&queue);
+				freeQueueElem(tmp);
+			}
+			else {
+				if (queue.head->executedMoves == maximunMoves) {
+					//printf("MAX MOVES BRANCH\n");
+					transitionResultsListElem *p;
+					for (p = listHead; p; p = p->next) {
+						if (p->isFinal) {
+							status = '1';
+							goto END;
+							//break;
+						}
+					}
+					//if (status != '1') {
+					enqueue(&queue, dequeue(&queue));
+					//}
+				}
+				else {
+					//printf("DEFAULT BRANCH\n");
+					queueElem *tmp = queue.head;
+					transitionResultsListElem *p;
+					boolType isForked = FALSE;
+					for (p = listHead->next; p; p = p->next) {
+						//printf("LIST MORE THAN 1\n");
+						if (p->isFinal) {
+							status = '1';
+							goto END;
+							//break;
+							//printf("is Final\n");
+						}
+						else {
+							//queueElem *new = malloc(sizeof(queueElem));
+							//new->currentState = p->nextState;
+							//new->tape = malloc(sizeof(char)*originalTapeSize);
+							//memcpy(new->tape, tmp->tape, sizeof(char)*originalTapeSize);
+							//new->tape[tmp->currentTapePosition] = p->tapeOut;
+							//new->currentTapePosition = tmp->currentTapePosition + p->tapeMovement;
+							//new->executedMoves = tmp->executedMoves;
+							if (p->moveType == U) {
+								status = 'U';
+							}
+							else {
+								//isForked = TRUE;
+								queueElem *new = newQueueElem(tmp, p->nextState, p->tapeOut, p->tapeMovement, p->moveType);
+								enqueue(&queue, new);
+							}
+						}
+					}
+					if (listHead->isFinal) {
+						status = '1';
+						goto END;
+						//printf("is Final\n");
+					}
+					else {
+						if (listHead->moveType == U) {
+							status = 'U';
+							freeQueueElem(dequeue(&queue));
+						}
+						else {
+							tmp->currentState = listHead->nextState;
+							//tmp->tape[tmp->currentTapePosition] = listHead->tapeOut;
+							if (listHead->moveType == W) {
+								tapeWrite(&(tmp->tapeContainer), tmp->currentTapePosition, listHead->tapeOut);
+							}
+							tmp->currentTapePosition = tmp->currentTapePosition + listHead->tapeMovement;
+							if (isForked == FALSE) {
+								enqueue(&queue, dequeue(&queue));
+							}
+						}
+					}
+				}
+
+				//}
+
+			}
+		}
+
+		//if (queue.head == NULL && waitQueue.head != NULL) {
+		//	enqueue(&queue, dequeue(&waitQueue));
+		//}
+
+	}
+	//if (queue.head == NULL)
+	//	printf("head == NULL\n");
+	//if (status == '1')
+	//	printf("STATUS == 1\n");
+END:;
+
+	while (queue.head != NULL) {
+		freeQueueElem(dequeue(&queue));
+	}
+
+	//while (waitQueue.head != NULL) {
+	//	freeQueueElem(dequeue(&waitQueue));
+	//}
+
+	return status;
+}
+
+inline void enqueue(runQueue *queue, queueElem *new) {
+
+	if (queue->tail == NULL) {
+		queue->head = new;
+		queue->tail = new;
+		//queue->tail->next = NULL;
+		return;
+	}
+
+	queue->tail->next = new;
+	queue->tail = new;
+	queue->tail->next = NULL;
+
+	//if (queue->tail == NULL) {
+	//	printf("!!!!!!!!!!!!\nBOH\n!!!!!!!!!!!!!!\n");
+	//	queue->head = new;
+	//	queue->tail = new;
+	//}
+	//else {
+	//	queue->tail->next = new;
+	//	queue->tail = new;
+	//}
+	//queue->size++;
+
+
+	//if (queue->tail == NULL)
+	//	queue->tail = new;
+	//else {
+	//	queue->tail->next = new;
+	//	queue->tail = new;
+	//}
+	//queue->tail->next = NULL;
+	//if (queue->head == NULL)
+	//	queue->head = queue->tail;
+
+	//queue->size++;
+}
+
+inline queueElem *dequeue(runQueue *queue) {
+
+	if (queue->head == NULL) {
 		return NULL;
 	}
 
-	int quanti_figli = 0;
-	char char_puntato_nastro = m.stringa->s[m.n_testa];
-	int d1 = m.stato_corrente & (N_TRANS - 1);
+	queueElem *old = queue->head;
+	queue->head = queue->head->next;
 
-	struct rigals* t_ritornare = NULL;
+	if (queue->head == NULL)
+		queue->tail = NULL;
+	return old;
 
-	struct rigals* t = rigal[d1][char_puntato_nastro - '0'];
-	while (t != NULL)
-	{
-		if (t->s.i == m.stato_corrente)
-		{
-			if (t->s.l == char_puntato_nastro)
-			{
-				t_ritornare = t;
-				quanti_figli++;
-			}
+
+
+	//queueElem *old = NULL;
+	//if (queue->size == 0)
+	//	printf("errore coda vuota\n");
+	//else {
+	//	old = queue->head;
+	//	queue->head = queue->head->next;
+	//	queue->size--;
+	//}
+
+
+	//queueElem *old = queue->head;
+	//queue->head = queue->head->next;
+	//if (queue->tail == old) {
+	//	queue->tail = NULL;
+	//}
+	//queue->size--;
+	////queue->head = queue->head->next == NULL ? queue->head : queue->head->next;
+	//return old;
+}
+
+inline transitionResultsListElem *getTransitionList(int currentState, char currentTapeChar) {
+	hashTableType *tmp = &(tapeInArray[(unsigned char)currentTapeChar]);
+
+	if (tmp->hashTable == NULL) {
+		return NULL;
+	}
+
+	int index = hashTableLookUpPosition(tmp->hashTable, tmp->size, currentState);
+	return tmp->hashTable[index].listHead;
+
+}
+
+inline void tapeWrite(struct tapeContainer_s *container, long index, char in) {
+	//container->tape[index / maximunMoves]->chunk;
+	unsigned char i = (index >= maximunMoves);
+	long n = customAbs(index - maximunMoves);
+	if (container->tape[i] == NULL) {
+		container->tape[i] = malloc(sizeof(tapeChunkElem));
+		container->tape[i]->size = initialTapeSize;
+		container->tape[i]->chunk = malloc(sizeof(char)* (1 << container->tape[i]->size));
+		memset(container->tape[i]->chunk, '_', sizeof(char)*(1 << container->tape[i]->size));
+		container->tape[i]->ref = 1;
+	}
+
+	while (n >= (1 << container->tape[i]->size)) {
+		unsigned char oldSize = container->tape[i]->size;
+		container->tape[i]->size += tapeSizeIncrement;
+		long m = MIN(1 << container->tape[i]->size, maximunMoves + 1);
+		//long m = 1 << container->tape[i]->size;
+		container->tape[i]->chunk = realloc(container->tape[i]->chunk, sizeof(char)* m);
+		memset(container->tape[i]->chunk + (1 << oldSize), '_', sizeof(char)* (m - (1 << oldSize)));
+	}
+
+	if (container->tape[i]->ref > 1) {
+		container->tape[i]->ref--;
+		tapeChunkElem *tmp = container->tape[i];
+		container->tape[i] = malloc(sizeof(tapeChunkElem));
+		container->tape[i]->chunk = malloc(sizeof(char)* (1 << tmp->size));
+		memcpy(container->tape[i]->chunk, tmp->chunk, sizeof(char)* (1 << tmp->size));
+		container->tape[i]->size = tmp->size;
+		container->tape[i]->ref = 1;
+	}
+	//printf("%d > %d\n", abs(index - maximunMoves), (2 << container->tape[i]->size));
+
+
+	container->tape[i]->chunk[n] = in;
+}
+
+inline char getTape(struct tapeContainer_s *container, long index) {
+	unsigned char i = (index >= maximunMoves);
+	long n = customAbs(index - maximunMoves);
+	if (container->tape[i] == NULL) {
+		return '_';
+	}
+	else if (n >= (1 << container->tape[i]->size)) {
+		return '_';
+	}
+	return container->tape[i]->chunk[n];
+
+}
+
+queueElem *newQueueElem(queueElem *src, int nextState, char tapeOut, int tapeMovement, moveType_t moveType) {
+	queueElem *new = malloc(sizeof(queueElem));
+	new->currentState = nextState;
+
+	new->tapeContainer.tape[0] = src->tapeContainer.tape[0];
+	new->tapeContainer.tape[1] = src->tapeContainer.tape[1];
+
+	if (new->tapeContainer.tape[0] != NULL) {
+		new->tapeContainer.tape[0]->ref++;
+	}
+	if (new->tapeContainer.tape[1] != NULL) {
+		new->tapeContainer.tape[1]->ref++;
+	}
+
+	if (moveType == W) {
+		tapeWrite(&(new->tapeContainer), src->currentTapePosition, tapeOut);
+	}
+	new->executedMoves = src->executedMoves;
+	new->currentTapePosition = src->currentTapePosition + tapeMovement;
+	return new;
+
+}
+
+void freeQueueElem(queueElem *elem) {
+
+	if (elem->tapeContainer.tape[0] != NULL) {
+		if (elem->tapeContainer.tape[0]->ref == 1) {
+			free(elem->tapeContainer.tape[0]->chunk);
+			free(elem->tapeContainer.tape[0]);
 		}
-		t = t->next;
-	}
-
-	if (quanti_figli == 1)
-	{
-		return t_ritornare;
-	}
-
-	t = rigal[d1][char_puntato_nastro - '0'];
-	while (t != NULL)
-	{
-		if (t->s.i == m.stato_corrente)
-		{
-			if (t->s.l == char_puntato_nastro)
-			{
-				
-				if (t->s.f == t->s.i)
-				{
-					if (t->s.l == CHAR_NIENTE && t->s.m == -1 && m.n_testa == N_ACCRESCI_NASTRO - 1)
-					{
-						AggiornaSoluzione('U');
-						t = t->next;
-						continue;
-					}
-					else if (t->s.l == CHAR_NIENTE && t->s.m == 1 && m.n_testa == m.stringa->n_stringa - N_ACCRESCI_NASTRO)
-					{
-						AggiornaSoluzione('U');
-						t = t->next;
-						continue;
-					}
-					else if (t->s.m == 0 && t->s.l == t->s.s)
-					{
-						AggiornaSoluzione('U');
-						t = t->next;
-						continue;
-					}
-				}
-				
-
-				//questo vuole dire che questa transizione è permessa, e quindi bisogna farla :)
-				struct mossal* ml = (struct mossal*)malloc2(sizeof(struct mossal));
-
-				ml->m.n_mosse = m.n_mosse + 1;
-				ml->m.stato_corrente = t->s.f;
-
-				int n_testa2 = m.n_testa;
-
-				ml->m.n_testa = n_testa2 + t->s.m;
-
-				int inc = 0;
-				if (ml->m.n_testa >= (int)(m.stringa->n_stringa))
-				{
-					inc = 1;
-				}
-				else if (ml->m.n_testa < 0)
-				{
-					inc = -1;
-					n_testa2 += N_ACCRESCI_NASTRO;
-					ml->m.n_testa = N_ACCRESCI_NASTRO - 1;
-				}
-
-				struct string2* s2 = NULL;
-
-				if (t->s.l == t->s.s && inc == 0)
-				{
-					s2 = m.stringa;
-					s2->quante_volte_mi_usano++;
-				}
-				else
-				{
-					s2 = string_copy(m.stringa, inc);
-					s2->s[n_testa2] = t->s.s;
-					s2->quante_volte_mi_usano = 1;
-				}
-
-				ml->m.stringa = s2;
-
-
-
-
-				ml->next = NULL;
-				lista_mosse_coda->next = ml;
-				lista_mosse_coda = ml;
-
-
-				if (ml->m.n_mosse <= max)
-				{
-					struct acc* t2 = accl[ml->m.stato_corrente&(N_ACCET - 1)];
-					while (t2 != NULL)
-					{
-						if (ml->m.stato_corrente == t2->n_stato)
-						{
-							AggiornaSoluzione('1');
-							ml->m.stringa->quante_volte_mi_usano--;
-							m.stringa->quante_volte_mi_usano--;
-							return NULL;
-						}
-
-						t2 = t2->next;
-					}
-				}
-
-			}
+		else {
+			elem->tapeContainer.tape[0]->ref--;
 		}
-		t = t->next;
+	}
+	if (elem->tapeContainer.tape[1] != NULL) {
+		if (elem->tapeContainer.tape[1]->ref == 1) {
+			free(elem->tapeContainer.tape[1]->chunk);
+			free(elem->tapeContainer.tape[1]);
+		}
+		else {
+			elem->tapeContainer.tape[1]->ref--;
+		}
 	}
 
-	m.stringa->quante_volte_mi_usano--;
-	return NULL;
+	free(elem);
+
 }
 
 
+void printQueue(runQueue *queue) {
+	queueElem *tmp = queue->head;
+	int boo;
+	staticCounter++;
+	printf("Iterazione %d:\n", staticCounter);
+	while (tmp != NULL) {
+		printf("tmp: %d\n", tmp);
+		printf("tmp->currentState: %d\n", tmp->currentState);
+		printf("tmp->currentTapePosition: %d\n", tmp->currentTapePosition);
+		printf("tmp->next: %d\n", tmp->next);
+		printf("tmp->executedMoves: %d\n", tmp->executedMoves);
+		printf("tmp->tapeContainer.tape[0]: %d", tmp->tapeContainer.tape[0]);
+		if (tmp->tapeContainer.tape[0] != NULL)
+			printf("  (ref = %d)\n", tmp->tapeContainer.tape[0]->ref);
+		else
+			printf("  (ref = 1)\n");
 
-inline void Risolvi2(struct mossal* m)
-{
-	char gia_vinto = 0;
-	if (m->m.n_mosse <= max)
-	{
-		struct acc* t2 = accl[m->m.stato_corrente&(N_ACCET - 1)];
-		while (t2 != NULL)
-		{
-			if (m->m.stato_corrente == t2->n_stato)
-			{
-				AggiornaSoluzione('1');
-				m->m.stringa->quante_volte_mi_usano--;
-				gia_vinto = 1;
-			}
-
-			t2 = t2->next;
-		}
-	}
-
-	lista_mosse_coda = m;
-
-	struct mossal* t = lista_mosse_coda;
-
-	if (gia_vinto==0)
-	{
-
-		do {
-			if (soluz == '1')
-				break;
-
-			struct rigals* t_eseguire = Risolvi(t->m);
-
-
-
-
-
-
-			if (t_eseguire == NULL)
-			{
-				struct mossal* to_delete = t;
-				t = t->next;
-				if (to_delete->m.stringa->quante_volte_mi_usano <= 0)
-				{
-					free2(to_delete->m.stringa->s);
-					free2(to_delete->m.stringa);
-				}
-				free2(to_delete);
-			}
+		printf("tmp->tapeContainer.tape[1]: %d", tmp->tapeContainer.tape[1]);
+		if (tmp->tapeContainer.tape[1] != NULL)
+			printf("  (ref = %d)\n", tmp->tapeContainer.tape[1]->ref);
+		else
+			printf("  (ref = 1)\n");
+		printf("\ttape:\n");
+		for (int v = 0; v < (2 * maximunMoves + 1); v++) {
+			boo = v;
+			if (v == tmp->currentTapePosition)
+				printf("^%C^", getTape(&(tmp->tapeContainer), v));
 			else
-			{
-				if (t_eseguire->s.f == t_eseguire->s.i)
-				{
-					if (t_eseguire->s.l == CHAR_NIENTE && t_eseguire->s.m == -1 && t->m.n_testa == N_ACCRESCI_NASTRO - 1)
-					{
-						AggiornaSoluzione('U');
-						struct mossal* to_delete = t;
-						t = t->next;
-						if (to_delete->m.stringa->quante_volte_mi_usano <= 0)
-						{
-							free2(to_delete->m.stringa->s);
-							free2(to_delete->m.stringa);
-						}
-						free2(to_delete);
-						continue;
-					}
-					else if (t_eseguire->s.l == CHAR_NIENTE && t_eseguire->s.m == 1 && t->m.n_testa == t->m.stringa->n_stringa - N_ACCRESCI_NASTRO)
-					{
-						AggiornaSoluzione('U');
-						struct mossal* to_delete = t;
-						t = t->next;
-						if (to_delete->m.stringa->quante_volte_mi_usano <= 0)
-						{
-							free2(to_delete->m.stringa->s);
-							free2(to_delete->m.stringa);
-						}
-						free2(to_delete);
-						continue;
-					}
-					else if (t_eseguire->s.m == 0 && t_eseguire->s.l == t_eseguire->s.s)
-					{
-						AggiornaSoluzione('U');
-						struct mossal* to_delete = t;
-						t = t->next;
-						if (to_delete->m.stringa->quante_volte_mi_usano <= 0)
-						{
-							free2(to_delete->m.stringa->s);
-							free2(to_delete->m.stringa);
-						}
-						free2(to_delete);
-						continue;
-					}
-				}
-
-
-				t->m.n_mosse++;
-				t->m.stato_corrente = t_eseguire->s.f;
-
-				int n_testa2 = t->m.n_testa;
-
-				t->m.n_testa = n_testa2 + t_eseguire->s.m;
-
-				int inc = 0;
-				if (t->m.n_testa >= (int)(t->m.stringa->n_stringa))
-				{
-					inc = 1;
-				}
-				else if (t->m.n_testa < 0)
-				{
-					inc = -1;
-					n_testa2 += N_ACCRESCI_NASTRO;
-					t->m.n_testa = N_ACCRESCI_NASTRO - 1;
-				}
-
-				struct string2* s2 = NULL;
-
-				if (t_eseguire->s.l != t_eseguire->s.s || inc != 0)
-				{
-					s2 = string_copy(t->m.stringa, inc);
-
-					t->m.stringa->quante_volte_mi_usano--;
-					if (t->m.stringa->quante_volte_mi_usano <= 0)
-					{
-						free2(t->m.stringa->s);
-						free2(t->m.stringa);
-					}
-
-					s2->s[n_testa2] = t_eseguire->s.s;
-					s2->quante_volte_mi_usano = 1;
-					t->m.stringa = s2;
-				}
-
-				if (t->m.n_mosse <= max)
-				{
-					struct acc* t2 = accl[t->m.stato_corrente&(N_ACCET - 1)];
-					while (t2 != NULL)
-					{
-						if (t->m.stato_corrente == t2->n_stato)
-						{
-							AggiornaSoluzione('1');
-							t->m.stringa->quante_volte_mi_usano--;
-							break;
-						}
-
-						t2 = t2->next;
-					}
-				}
-			}
-
-
-
-		} while (t != NULL);
-	}
-	while (t != NULL)	//POTREBBE ESSERE USCITO PERCHE SOLUZ=1 MA VA PULITA LO STESSO LA CODA
-	{
-		struct mossal* to_delete = t;
-		t = t->next;
-
-		if (to_delete->m.stringa->quante_volte_mi_usano <= 0)
-		{
-			free2(to_delete->m.stringa->s);
-			free2(to_delete->m.stringa);
+				printf("%c", getTape(&(tmp->tapeContainer), v));
 		}
 
-		free2(to_delete);
+		printf("\nv=%d\n", boo);
+		printf("\n");
+		fflush(stdout);
+		tmp = tmp->next;
 	}
-
 
 }
 
-int main()
-{
-	FILE *fp;
-	//fp = fopen("C:\\Users\\FedericoArmellini\\source\\repos\\ProgettoApiTuring\\input_slide\\1.txt", "r");
-	//fp = fopen("C:\\Users\\FedericoArmellini\\source\\repos\\ProgettoApiTuring\\pubblici\\input\\fl.txt", "r");
-	//fp = fopen("C:\\Users\\FedericoArmellini\\source\\repos\\ProgettoApiTuring\\PossibiliInput\\41.txt", "r");
-	fp = stdin;
+inline long MIN(long a, long b) {
+	return a ^ ((b ^ a) & -(b < a));
+}
 
-	//f_log = fopen("C:\\git\\ProgettoApiTuring\\log\\log.txt","w");
-
-	if (fp == NULL)
-	{
-		printf("Error!");
-		return 1;
-	}
-
-	size_t read = 0;
-	char * line = NULL;
-	size_t len = 0;
-
-	read = getline2(&line, &len, fp); // tr 
-
-	while ((read = getline2(&line, &len, fp)) != -1) {
-		if (line[0] == 'a')
-			break;
-
-
-		struct riga x;
-		int i = 1;
-		x.i = line[0] - '0';
-		while (line[i] != ' ')// && line[i] != '\n' && line[i] != '\0')
-		{
-			x.i *= 10;
-			x.i += line[i] - '0';
-			i++;
-		}
-
-		while (line[i] == ' ')
-		{
-			i++;
-		}
-
-		x.l = line[i];
-		i++;
-
-		while (line[i] == ' ')
-		{
-			i++;
-		}
-
-		x.s = line[i];
-		i++;
-
-		while (line[i] == ' ')
-		{
-			i++;
-		}
-
-		switch (line[i])
-		{
-		case 'L':
-		{
-			x.m = -1;
-			break;
-		}
-		case 'R':
-		{
-			x.m = 1;
-			break;
-		}
-		default:
-		{
-			x.m = 0;
-			break;
-		}
-		}
-		i++;
-
-		while (line[i] == ' ')
-		{
-			i++;
-		}
-
-		x.f = line[i] - '0';
-		i++;
-		while (line[i] >= '0' && line[i] <= '9')
-		{
-			x.f *= 10;
-			x.f += line[i] - '0';
-			i++;
-		}
-
-		insert_top_t(&x);
-	}
-
-	while ((read = getline2(&line, &len, fp)) != -1) {
-		if (line[0] == 'm')
-		{
-			break;
-		}
-
-
-		int i = 1;
-		int n = line[0] - '0';
-		while (line[i] >= '0' && line[i] <= '9')
-		{
-			n *= 10;
-			n += line[i] - '0';
-			i++;
-		}
-		insert_top_a(n, accl);
-	}
-
-	read = getline2(&line, &len, fp); //max
-	int i = 1;
-	max = line[0] - '0';
-	while (line[i] >= '0' && line[i] <= '9')
-	{
-		max *= 10;
-		max += line[i] - '0';
-		i++;
-	}
-
-	//  printf("%d",max);
-
-
-	read = getline2(&line, &len, fp); //"run"
-	while ((read = getline2(&line, &len, fp)) != -1) {
-
-
-		unsigned r2 = (unsigned)read;
-		struct mossal* ml = (struct mossal*)malloc2(sizeof(struct mossal));
-		ml->m.stringa = (struct string2*)malloc2(sizeof(struct string2));
-		char* s4 = (char*)malloc2(sizeof(char)*r2);
-		for (unsigned i = 0; i<r2; i++)
-		{
-			s4[i] = line[i];
-		}
-		ml->m.stringa->s = s4;
-		ml->m.stringa->n_stringa = r2;
-		ml->m.stringa->quante_volte_mi_usano = 1;
-
-		ml->m.n_testa = 0;
-		ml->m.n_mosse = 0;
-		ml->m.stato_corrente = 0;
-
-		ml->next = NULL;
-
-		soluz = '0';
-		Risolvi2(ml);
-		printf("%c\n", soluz);
-	}
-
-	free2(line);
-
-
-	fclose(fp);
-
-	for (int i = 0; i < N_ACCET; i++)
-	{
-		struct acc* tr = accl[i];
-		while (tr != NULL)
-		{
-			struct acc* td = tr;
-			tr = tr->next;
-			free2(td);
-		}
-	}
-
-	for (unsigned i = 0; i < N_TRANS; i++)
-	{
-		for (unsigned j = 0; j < N_CHAR; j++)
-		{
-			struct rigals* tr2 = rigal[i][j];
-			while (tr2 != NULL)
-			{
-				struct rigals* td2 = tr2;
-				tr2 = tr2->next;
-				free2(td2);
-			}
-		}
-	}
-
-
-	//fclose(f_log);
-	//system("pause");
-	return 0;
+inline long customAbs(long v) {
+	int const mask = v >> sizeof(long) * CHAR_BIT - 1;
+	return (v + mask) ^ mask;
 }
